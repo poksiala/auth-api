@@ -77,20 +77,36 @@ def v1_callback(
         samesite="lax",
         secure=secure,
     )
+    response.set_cookie(
+        "access_token",
+        value=token["access_token"],
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+    )
+    response.set_cookie(
+        "id_token",
+        value=token["id_token"],
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+    )
 
 
 @app.get("/v1/token")
-def v1_token(response: Response, token: Annotated[str | None, Cookie()] = None):
-    if token is None:
+def v1_token(response: Response, access_token: Annotated[str | None, Cookie()] = None):
+    if access_token is None:
         response.status_code = 401
         return "Missing token cookie"
     return token
 
 
 @app.get("/v1/userinfo")
-def v1_userinfo(response: Response, token: Annotated[str | None, Cookie()] = None):
-    if token is None:
+def v1_userinfo(
+    response: Response, access_token: Annotated[str | None, Cookie()] = None
+):
+    if access_token is None:
         response.status_code = 401
         return "Missing token cookie"
-    user_info = oauth2_client.fetch_user_info(token)
+    user_info = oauth2_client.fetch_user_info({"access_token": access_token})
     return user_info
