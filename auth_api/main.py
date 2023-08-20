@@ -5,11 +5,18 @@ from typing import Annotated
 from fastapi import FastAPI, Response, Cookie
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from requests_oauthlib import OAuth2Session
+import jwt
+from jwt import PyJWKClient
+from pydantic import BaseModel
 import sentry_sdk
 
 from .config import read_config_file, fetch_openid_config
 from .oauth2_client import OAuth2Client
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    details: str | None
 
 
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +47,9 @@ oauth2_client = OAuth2Client(
 @app.get("/v1/login")
 def v1_login() -> str:
     secure = config.api.url.startswith("https")
-    login_url, state = oauth2_client.authorization_url(scope=["openid", "email"])
+    login_url, state = oauth2_client.authorization_url(
+        scope=["openid", "email", "profile"]
+    )
 
     response = RedirectResponse(login_url)
     response.set_cookie(
@@ -97,8 +106,8 @@ def v1_callback(
 def v1_token(response: Response, access_token: Annotated[str | None, Cookie()] = None):
     if access_token is None:
         response.status_code = 401
-        return "Missing token cookie"
-    return token
+        return "Missing access_token cookie"
+    return access_token
 
 
 @app.get("/v1/userinfo")
@@ -107,6 +116,64 @@ def v1_userinfo(
 ):
     if access_token is None:
         response.status_code = 401
-        return "Missing token cookie"
+        return "Missing access_token cookie"
     user_info = oauth2_client.fetch_user_info({"access_token": access_token})
     return user_info
+
+
+class UserResponse(BaseModel):
+    iss: str
+    sub: str
+    aud: str
+    exp: int
+    iat: int
+    at_hash: str
+    c_hash: str
+    email: str
+    email_verified: bool
+    name: str
+    preferred_username: str
+
+
+@app.get("/v1/user")
+def v1_user(
+    response: Response,
+    id_token: str,
+) -> UserResponse | ErrorResponse:
+    url = dex_config.jwks_uri
+    jwk_client = PyJWKClient(url)
+    signing_key = jwk_client.get_signing_key_from_jwt(id_token)
+    try:
+        data = jwt.decode(
+            jwt=id_token,
+            key=signing_key.key,
+            algorithms=["RS256"],
+            options={
+                "verify_signature": True,
+                "require": [
+                    "aud",
+                    "iss",
+                    "exp",
+                    "iat",
+                ],
+                "verify_aud": True,
+                "verify_iss": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "strict_aud": True,
+            },
+            audience=config.oidc.client_id,
+            issuer=dex_config.issuer,
+        )
+    except jwt.exceptions.InvalidTokenError as e:
+        response.status_code = 401
+        logging.error(e)
+        return {"error": "Invalid token", "details": str(e)}
+    except Exception as e:
+        response.status_code = 500
+        logging.error(e)
+        return {"error": "Internal server error"}
+    if not data.get("email_verified"):
+        response.status_code = 401
+        return {"error": "Email not verified", "details": "Email not verified"}
+    return UserResponse(**data)

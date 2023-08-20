@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "atk-auth-api"
-version = "0.2.0"
+version = "0.3.0"
 description = "An API for interfacing with DEX IdP"
 authors = ["Panu Oksiala <panu@oksiala.fi>"]
 readme = "README.md"
